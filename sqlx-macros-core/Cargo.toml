@@ -20,6 +20,7 @@ _tls-rustls-ring-webpki = ["sqlx-core/_tls-rustls-ring-webpki"]
 _tls-rustls-ring-native-roots = ["sqlx-core/_tls-rustls-ring-native-roots"]
 
 _sqlite = []
+_duckdb = []
 
 # SQLx features
 derive = []
@@ -31,24 +32,26 @@ mysql = ["sqlx-mysql"]
 postgres = ["sqlx-postgres"]
 sqlite = ["_sqlite", "sqlx-sqlite/bundled"]
 sqlite-unbundled = ["_sqlite", "sqlx-sqlite/unbundled"]
+duckdb = ["_duckdb", "sqlx-duckdb/bundled"]
+duckdb-unbundled = ["_duckdb", "sqlx-duckdb/unbundled"]
 
 # type integrations
-json = ["sqlx-core/json", "sqlx-mysql?/json", "sqlx-postgres?/json", "sqlx-sqlite?/json"]
-
+json = ["sqlx-core/json", "sqlx-mysql?/json", "sqlx-postgres?/json", "sqlx-sqlite?/json", "sqlx-duckdb?/json"]
 bigdecimal = ["sqlx-core/bigdecimal", "sqlx-mysql?/bigdecimal", "sqlx-postgres?/bigdecimal"]
 bit-vec = ["sqlx-core/bit-vec", "sqlx-postgres?/bit-vec"]
-chrono = ["sqlx-core/chrono", "sqlx-mysql?/chrono", "sqlx-postgres?/chrono", "sqlx-sqlite?/chrono"]
+chrono = ["sqlx-core/chrono", "sqlx-mysql?/chrono", "sqlx-postgres?/chrono", "sqlx-sqlite?/chrono", "sqlx-duckdb?/chrono"]
 ipnetwork = ["sqlx-core/ipnetwork", "sqlx-postgres?/ipnetwork"]
 mac_address = ["sqlx-core/mac_address", "sqlx-postgres?/mac_address"]
 rust_decimal = ["sqlx-core/rust_decimal", "sqlx-mysql?/rust_decimal", "sqlx-postgres?/rust_decimal"]
-time = ["sqlx-core/time", "sqlx-mysql?/time", "sqlx-postgres?/time", "sqlx-sqlite?/time"]
-uuid = ["sqlx-core/uuid", "sqlx-mysql?/uuid", "sqlx-postgres?/uuid", "sqlx-sqlite?/uuid"]
+time = ["sqlx-core/time", "sqlx-mysql?/time", "sqlx-postgres?/time", "sqlx-sqlite?/time", "sqlx-duckdb?/time"]
+uuid = ["sqlx-core/uuid", "sqlx-mysql?/uuid", "sqlx-postgres?/uuid", "sqlx-sqlite?/uuid", "sqlx-duckdb?/uuid"]
 
 [dependencies]
 sqlx-core = { workspace = true, features = ["offline"] }
 sqlx-mysql = { workspace = true, features = ["offline", "migrate"], optional = true }
 sqlx-postgres = { workspace = true, features = ["offline", "migrate"], optional = true }
 sqlx-sqlite = { workspace = true, features = ["offline", "migrate"], optional = true }
+sqlx-duckdb = { workspace = true, features = ["offline", "migrate"], optional = true }
 
 async-std = { workspace = true, optional = true }
 tokio = { workspace = true, optional = true }
