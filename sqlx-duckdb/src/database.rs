@@ -8,9 +8,39 @@ use crate::{
 };
 */
 
-/// Sqlite database driver.
+
+
+/// DuckDB database driver.
 #[derive(Debug)]
-pub struct Sqlite;
+pub struct DuckDB;
+
+/*
+impl Database for DuckDB {
+    type Connection = DuckDBConnection;
+
+    type TransactionManager = DuckDBTransactionManager;
+
+    type Row = DuckDBRow;
+
+    type QueryResult = DuckDBQueryResult;
+
+    type Column = DuckDBColumn;
+
+    type TypeInfo = DuckDBTypeInfo;
+
+    type Value = DuckDBValue;
+    type ValueRef<'r> = DuckDBValueRef<'r>;
+
+    type Arguments<'q> = DuckDBArguments<'q>;
+    type ArgumentBuffer<'q> = Vec<DuckDBArgumentValue<'q>>;
+
+    type Statement<'q> = DuckDBStatement<'q>;
+
+    const NAME: &'static str = "DuckDB";
+
+    const URL_SCHEMES: &'static [&'static str] = &["duckdb"];
+}
+*/
 
 /*
 impl Database for Sqlite {
@@ -40,4 +70,4 @@ impl Database for Sqlite {
 }
 */
 
-impl HasStatementCache for Sqlite {}
+impl HasStatementCache for DuckDB {}

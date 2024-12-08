@@ -39,10 +39,13 @@
 // invariants.
 #![allow(unsafe_code)]
 
-/*
 #[macro_use]
 extern crate sqlx_core;
 
+pub use connection::DuckDBConnection;
+pub use database::DuckDB;
+pub use error::DuckDBError;
+/*
 use std::sync::atomic::AtomicBool;
 
 pub use arguments::{SqliteArgumentValue, SqliteArguments};
@@ -70,15 +73,18 @@ use sqlx_core::executor::Executor;
 
 mod arguments;
 mod column;
+*/
 mod connection;
 mod database;
+mod options;
+mod transaction;
+mod error;
+/*
 mod error;
 mod logger;
-mod options;
 mod query_result;
 mod row;
 mod statement;
-mod transaction;
 mod type_checking;
 mod type_info;
 pub mod types;

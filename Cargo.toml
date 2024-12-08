@@ -56,7 +56,7 @@ features = ["all-databases", "_unstable-all-types"]
 rustdoc-args = ["--cfg", "docsrs"]
 
 [features]
-default = ["any", "macros", "migrate", "json"]
+default = ["any", "macros", "migrate", "json", "duckdb"]
 
 derive = ["sqlx-macros/derive"]
 macros = ["derive", "sqlx-macros/macros"]
