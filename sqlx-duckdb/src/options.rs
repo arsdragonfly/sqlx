@@ -144,10 +144,10 @@ fn event_loop(
             ConnectionMessage::Close(s) => {
                 return Some(s);
             }
-            _ => {
+            ConnectionMessage::Begin(s) => {
                 // let txn = conn.borrow_mut().transaction().unwrap();
-                begin_txn(conn, ctx_);
-                todo!();
+                let result = begin_txn(conn, ctx_);
+                s.send(result.map_err(|e| DuckDBError::new(e)));
             }
         }
     }
@@ -157,22 +157,21 @@ fn event_loop(
 fn begin_txn<'b, 'a: 'b>(
     conn: &'a mut duckdb::Connection,
     ctx: &RefCell<ConnectionContext<'b>>,
-) {
-    // let txn = conn.transaction().unwrap();
-    let txn = conn.transaction().unwrap();
-    let txn_ctx = DuckDBTransactionContext {
-        transaction: txn,
-        savepoints: Vec::new(),
-    };
-    let new_ctx = RefCell::new(ConnectionContext {
-        transaction_context: Some(txn_ctx),
-    });
-    new_ctx.swap(ctx);
-}
-
-fn foo() -> Box<CallFn> {
-    Box::new(&begin_txn)
-    // Box::new(|conn, ctx| -> () {
-    //     begin_txn(conn, ctx);
-    // })
+) -> Result<(), duckdb::Error> {
+    if let Some(ref mut txn_ctx) = ctx.borrow_mut().transaction_context {
+        let sp = conn.savepoint()?;
+        txn_ctx.savepoints.push(sp);
+        Ok(())
+    } else {
+        let txn = conn.transaction()?;
+        let txn_ctx = DuckDBTransactionContext {
+            transaction: txn,
+            savepoints: Vec::new(),
+        };
+        let new_ctx = RefCell::new(ConnectionContext {
+            transaction_context: Some(txn_ctx),
+        });
+        new_ctx.swap(ctx);
+        Ok(())
+    }
 }

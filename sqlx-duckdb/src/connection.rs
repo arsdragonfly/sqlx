@@ -82,7 +82,7 @@ pub type ConnectionCallFn = Box<CallFn>;
 pub enum ConnectionMessage {
     Execute(ConnectionCallFn),
     Close(oneshot::Sender<Result<(), DuckDBError>>),
-    Begin(),
+    Begin(oneshot::Sender<Result<(), DuckDBError>>),
 }
 
 pub(crate) struct ConnectionContext<'a> {
