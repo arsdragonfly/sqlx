@@ -1,4 +1,5 @@
 use std::cell::RefCell;
+use std::rc::Rc;
 use std::result::Result;
 use std::sync::{Arc, Mutex};
 
@@ -12,45 +13,76 @@ use crate::database::DuckDB;
 use crate::options::DuckDBConnectOptions;
 use crate::DuckDBError;
 
-trait FirstArgStaticLifetimeUnspecifiedReturnFn<A1, A2>: FnOnce(&mut A1, &mut A2) + Send + 'static where
-    A1: 'static,
+trait UnspecifiedReturnFn<A1, A2>:
+    FnOnce(&mut A1, &A2) + Send + 'static
 {
 }
 
-impl<F, A1, A2> FirstArgStaticLifetimeUnspecifiedReturnFn<A1, A2> for F where
-    F: FnOnce(&mut A1, &mut A2) + Send + 'static,
-    A1: 'static,
+impl<F, A1, A2> UnspecifiedReturnFn<A1, A2> for F
+where
+    F: FnOnce(&mut A1, &A2) + Send + 'static
 {
 }
 
-trait FirstArgStaticLifetimeFn<A1, A2, A3>: FnOnce(&mut A1, &mut A2) -> A3 + Send + 'static where
-    A1: 'static,
+trait FirstArgMutableRefFn<A1, A2, A3>:
+    FnOnce(&mut A1, &A2) -> A3 + Send + 'static
 {
 }
 
-impl<F, A1, A2, R> FirstArgStaticLifetimeFn<A1, A2, R> for F where
-    F: FnOnce(&mut A1, &mut A2) -> R + Send + 'static,
-    A1: 'static,
+impl<F, A1, A2, R> FirstArgMutableRefFn<A1, A2, R> for F
+where
+    F: FnOnce(&mut A1, & A2) -> R + Send + 'static,
 {
 }
 
-trait RawCallFnTrait<R>: for<'a> FirstArgStaticLifetimeFn<duckdb::Connection, ConnectionContext<'a>, Result<R, duckdb::Error>> {}
+trait RawCallFnTrait<'a, R>:
+    FirstArgMutableRefFn<
+    duckdb::Connection,
+    RefCell<ConnectionContext<'a>>,
+    Result<R, duckdb::Error>,
+>
+where
+    R: Send + 'static,
+{
+}
 
-impl<T, R> RawCallFnTrait<R> for T where T: for<'a> FirstArgStaticLifetimeFn<duckdb::Connection, ConnectionContext<'a>, Result<R, duckdb::Error>> {}
+impl<'a, T, R> RawCallFnTrait<'a, R> for T where
+    T: FirstArgMutableRefFn<
+        duckdb::Connection,
+        RefCell<ConnectionContext<'a>>,
+        Result<R, duckdb::Error>,
+    >,
+    R: Send + 'static,
+{
+}
 
-type RawCallFn<R> = dyn RawCallFnTrait<R>;
+type RawCallFn<R> = dyn for<'a> RawCallFnTrait<'a, R>;
 
-trait CallFnTrait: for<'a> FirstArgStaticLifetimeUnspecifiedReturnFn<duckdb::Connection, ConnectionContext<'a>> {}
+pub(crate) trait CallFnTrait<'a>:
+    UnspecifiedReturnFn<duckdb::Connection, RefCell<ConnectionContext<'a>>>
+{
+}
 
-impl<T> CallFnTrait for T where T: for<'a> FirstArgStaticLifetimeUnspecifiedReturnFn<duckdb::Connection, ConnectionContext<'a>> {}
+impl<'a, T> CallFnTrait<'a> for T where
+    T: UnspecifiedReturnFn<
+        duckdb::Connection,
+        RefCell<ConnectionContext<'a>>,
+    >
+{
+}
 
-type CallFn = dyn CallFnTrait;
+trait LifetimeAOutlivesLifetimeB<'a, 'b> where 'a: 'b {}
+
+impl<'a, 'b, T> LifetimeAOutlivesLifetimeB<'a, 'b> for T where 'a: 'b {}
+
+pub(crate) type CallFn = dyn for<'a> CallFnTrait<'a>;
 
 pub type ConnectionCallFn = Box<CallFn>;
 
 pub enum ConnectionMessage {
     Execute(ConnectionCallFn),
     Close(oneshot::Sender<Result<(), DuckDBError>>),
+    Begin(),
 }
 
 pub(crate) struct ConnectionContext<'a> {
@@ -69,7 +101,7 @@ pub struct DuckDBConnection {
 impl DuckDBConnection {
     pub async fn call<F, R>(&self, function: F) -> Result<R, sqlx_core::Error>
     where
-        F: RawCallFnTrait<R>,
+        F: for<'a> RawCallFnTrait<'a, R>,
         R: Send + 'static,
     {
         let (sender, receiver) = oneshot::channel::<Result<R, duckdb::Error>>();
@@ -143,9 +175,15 @@ impl Connection for DuckDBConnection {
         false
     }
 
-    fn begin(&mut self) -> BoxFuture<'_, Result<sqlx_core::transaction::Transaction<'_, Self::Database>, sqlx_core::Error>>
-        where
-            Self: Sized {
+    fn begin(
+        &mut self,
+    ) -> BoxFuture<
+        '_,
+        Result<sqlx_core::transaction::Transaction<'_, Self::Database>, sqlx_core::Error>,
+    >
+    where
+        Self: Sized,
+    {
         unimplemented!()
     }
 }

@@ -1,4 +1,6 @@
-use crate::connection::{ConnectionContext, ConnectionMessage, DuckDBConnection};
+use crate::connection::{
+    CallFn, CallFnTrait, ConnectionContext, ConnectionMessage, DuckDBConnection, DuckDBTransactionContext
+};
 use crate::{DuckDB, DuckDBError};
 use futures_channel::oneshot;
 pub(crate) use sqlx_core::connection::*;
@@ -6,6 +8,7 @@ use sqlx_core::executor::Execute;
 use sqlx_core::IndexMap;
 use std::borrow::BorrowMut;
 use std::cell::{Cell, RefCell, RefMut};
+use std::rc::Rc;
 use std::str::FromStr;
 use std::{borrow::Cow, thread};
 
@@ -78,8 +81,9 @@ impl ConnectOptions for DuckDBConnectOptions {
                     result_sender.send(Err(sqlx_core::Error::from(DuckDBError::new(e))));
                     return;
                 }
-                let conn_ = conn.unwrap();
-                let conn_cell:Cell<Option<duckdb::Connection>> = Cell::new(Some(conn_));
+                let conn_cell: Cell<Option<duckdb::Connection>> = Cell::new(Some(conn.unwrap()));
+                // let conn_: &'static mut _ = Box::leak(Box::new(conn.unwrap()));
+                // let conn_ = conn.unwrap();
                 loop {
                     {
                         let mut conn_raw = conn_cell.take().unwrap();
@@ -89,7 +93,7 @@ impl ConnectOptions for DuckDBConnectOptions {
                                 Ok(_) => {
                                     sender.send(Ok(()));
                                     break;
-                                },
+                                }
                                 Err((c, e)) => {
                                     sender.send(Err(DuckDBError::new(e)));
                                     conn_cell.set(Some(c));
@@ -126,19 +130,49 @@ impl ConnectOptions for DuckDBConnectOptions {
 }
 
 fn event_loop(
+    // conn: &mut duckdb::Connection,
     conn: &mut duckdb::Connection,
     receiver: &flume::Receiver<ConnectionMessage>,
 ) -> Option<oneshot::Sender<Result<(), DuckDBError>>> {
-    let mut ctx = ConnectionContext {
+    let mut ctx = RefCell::new(ConnectionContext {
         transaction_context: None,
-    };
+    });
+    let ctx_ = &ctx;
     while let Ok(message) = receiver.recv() {
         match message {
-            ConnectionMessage::Execute(f) => f(conn, &mut ctx),
+            ConnectionMessage::Execute(f) => f(conn, &ctx),
             ConnectionMessage::Close(s) => {
                 return Some(s);
+            }
+            _ => {
+                // let txn = conn.borrow_mut().transaction().unwrap();
+                begin_txn(conn, ctx_);
+                todo!();
             }
         }
     }
     return None;
+}
+
+fn begin_txn<'b, 'a: 'b>(
+    conn: &'a mut duckdb::Connection,
+    ctx: &RefCell<ConnectionContext<'b>>,
+) {
+    // let txn = conn.transaction().unwrap();
+    let txn = conn.transaction().unwrap();
+    let txn_ctx = DuckDBTransactionContext {
+        transaction: txn,
+        savepoints: Vec::new(),
+    };
+    let new_ctx = RefCell::new(ConnectionContext {
+        transaction_context: Some(txn_ctx),
+    });
+    new_ctx.swap(ctx);
+}
+
+fn foo() -> Box<CallFn> {
+    Box::new(&begin_txn)
+    // Box::new(|conn, ctx| -> () {
+    //     begin_txn(conn, ctx);
+    // })
 }
