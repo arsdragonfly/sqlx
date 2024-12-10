@@ -1,30 +1,21 @@
-use crate::{connection::{ConnectionContext, DuckDBTransactionContext}, DuckDB, DuckDBConnection, DuckDBError};
+use crate::{connection::{ConnectionContext, ConnectionMessage, DuckDBTransactionContext}, error::convert_received_error, DuckDB, DuckDBConnection, DuckDBError};
+use futures_channel::oneshot;
 use futures_core::future::BoxFuture;
 use futures_util::FutureExt;
 use sqlx_core::{connection::Connection, transaction::TransactionManager};
 
 pub struct DuckDBTransactionManager;
 
-trait IsDuckDBConnection {
-    fn as_duckdb(&self) -> &duckdb::Connection;
-    fn as_duckdb_mut(&mut self) -> &mut duckdb::Connection;
-}
-
-impl IsDuckDBConnection for duckdb::Connection {
-    fn as_duckdb(&self) -> &duckdb::Connection {
-        self
-    }
-
-    fn as_duckdb_mut(&mut self) -> &mut duckdb::Connection {
-        self
-    }
-}
-
 impl TransactionManager for DuckDBTransactionManager {
     type Database = DuckDB;
 
     fn begin(conn: &mut DuckDBConnection) -> BoxFuture<'_, Result<(), sqlx_core::Error>> {
-        unimplemented!()
+        Box::pin(async move {
+            let (sender, receiver) = oneshot::channel::<Result<(), DuckDBError>>();
+            conn.sender.send(
+                ConnectionMessage::Begin(sender)).map_err(|_| sqlx_core::Error::WorkerCrashed)?;
+            convert_received_error(receiver.await)
+        })
     }
 
     fn commit(conn: &mut DuckDBConnection) -> BoxFuture<'_, Result<(), sqlx_core::Error>> {

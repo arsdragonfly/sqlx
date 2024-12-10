@@ -1,7 +1,8 @@
 use crate::connection::{
-    CallFn, CallFnTrait, ConnectionContext, ConnectionMessage, DuckDBConnection, DuckDBTransactionContext
+    connect, CallFn, CallFnTrait, ConnectionContext, ConnectionMessage, DuckDBConnection, DuckDBTransactionContext
 };
 use crate::{DuckDB, DuckDBError};
+use duckdb::Savepoint;
 use futures_channel::oneshot;
 pub(crate) use sqlx_core::connection::*;
 use sqlx_core::executor::Execute;
@@ -11,6 +12,7 @@ use std::cell::{Cell, RefCell, RefMut};
 use std::rc::Rc;
 use std::str::FromStr;
 use std::{borrow::Cow, thread};
+use tracing::event;
 
 #[derive(Clone, Debug)]
 pub struct DuckDBConnectConfig {
@@ -59,58 +61,7 @@ impl ConnectOptions for DuckDBConnectOptions {
     where
         Self::Connection: Sized,
     {
-        Box::pin(async move {
-            let (sender, receiver) = flume::unbounded::<ConnectionMessage>();
-            let (result_sender, result_receiver) =
-                oneshot::channel::<Result<Self::Connection, sqlx_core::Error>>();
-            let url_clone = self.url.clone();
-            let config_clone = self.config.clone();
-            thread::spawn(move || {
-                let mut config = duckdb::Config::default();
-                for (key, value) in config_clone.config {
-                    match config.with(key.as_ref(), value.as_ref()) {
-                        Err(e) => {
-                            result_sender.send(Err(sqlx_core::Error::from(DuckDBError::new(e))));
-                            return;
-                        }
-                        Ok(a) => config = a,
-                    }
-                }
-                let conn = duckdb::Connection::open_with_flags(url_clone.as_str(), config);
-                if let Err(e) = conn {
-                    result_sender.send(Err(sqlx_core::Error::from(DuckDBError::new(e))));
-                    return;
-                }
-                let conn_cell: Cell<Option<duckdb::Connection>> = Cell::new(Some(conn.unwrap()));
-                // let conn_: &'static mut _ = Box::leak(Box::new(conn.unwrap()));
-                // let conn_ = conn.unwrap();
-                loop {
-                    {
-                        let mut conn_raw = conn_cell.take().unwrap();
-                        if let Some(sender) = event_loop(&mut conn_raw, &receiver) {
-                            // we received a signal to close the connection
-                            match conn_raw.close() {
-                                Ok(_) => {
-                                    sender.send(Ok(()));
-                                    break;
-                                }
-                                Err((c, e)) => {
-                                    sender.send(Err(DuckDBError::new(e)));
-                                    conn_cell.set(Some(c));
-                                }
-                            }
-                        } else {
-                            break;
-                        }
-                    }
-                }
-            });
-            let result = result_receiver.await;
-            match result {
-                Err(e) => Err(sqlx_core::Error::WorkerCrashed),
-                Ok(res) => res,
-            }
-        })
+        connect(self)
     }
 
     fn log_statements(self, level: log::LevelFilter) -> Self {
@@ -126,52 +77,5 @@ impl ConnectOptions for DuckDBConnectOptions {
     fn disable_statement_logging(self) -> Self {
         // TODO: implement this
         self
-    }
-}
-
-fn event_loop(
-    // conn: &mut duckdb::Connection,
-    conn: &mut duckdb::Connection,
-    receiver: &flume::Receiver<ConnectionMessage>,
-) -> Option<oneshot::Sender<Result<(), DuckDBError>>> {
-    let mut ctx = RefCell::new(ConnectionContext {
-        transaction_context: None,
-    });
-    let ctx_ = &ctx;
-    while let Ok(message) = receiver.recv() {
-        match message {
-            ConnectionMessage::Execute(f) => f(conn, &ctx),
-            ConnectionMessage::Close(s) => {
-                return Some(s);
-            }
-            ConnectionMessage::Begin(s) => {
-                // let txn = conn.borrow_mut().transaction().unwrap();
-                let result = begin_txn(conn, ctx_);
-                s.send(result.map_err(|e| DuckDBError::new(e)));
-            }
-        }
-    }
-    return None;
-}
-
-fn begin_txn<'b, 'a: 'b>(
-    conn: &'a mut duckdb::Connection,
-    ctx: &RefCell<ConnectionContext<'b>>,
-) -> Result<(), duckdb::Error> {
-    if let Some(ref mut txn_ctx) = ctx.borrow_mut().transaction_context {
-        let sp = conn.savepoint()?;
-        txn_ctx.savepoints.push(sp);
-        Ok(())
-    } else {
-        let txn = conn.transaction()?;
-        let txn_ctx = DuckDBTransactionContext {
-            transaction: txn,
-            savepoints: Vec::new(),
-        };
-        let new_ctx = RefCell::new(ConnectionContext {
-            transaction_context: Some(txn_ctx),
-        });
-        new_ctx.swap(ctx);
-        Ok(())
     }
 }
