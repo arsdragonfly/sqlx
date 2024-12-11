@@ -6,11 +6,25 @@ use std::sync::Arc;
 use crate::DuckDB;
 
 // #[derive(Debug, Display, From, Into, AsRef, AsMut, Deref, DerefMut, Constructor, Error)]
+
+#[derive(Debug, Display, Error)]
+pub enum DuckDBSQLxError {
+    DuckDBError(duckdb::Error),
+    #[display("Savepoints (nested transactions) are not supported by DuckDB")]
+    SavepointUnsupported,
+}
+
+impl From<duckdb::Error> for DuckDBSQLxError {
+    fn from(error: duckdb::Error) -> Self {
+        Self::DuckDBError(error)
+    }
+}
+
 #[derive(Debug, Display)]
 #[display("{}", message)]
 pub struct DuckDBError
 {
-    pub error: duckdb::Error,
+    pub error: DuckDBSQLxError,
     pub message: String,
 }
 
@@ -20,14 +34,20 @@ impl std::error::Error for DuckDBError {
     }
 }
 
-impl From<duckdb::Error> for DuckDBError {
-    fn from(error: duckdb::Error) -> Self {
+impl From<DuckDBSQLxError> for DuckDBError {
+    fn from(error: DuckDBSQLxError) -> Self {
         Self::new(error)
     }
 }
 
+impl From<duckdb::Error> for DuckDBError {
+    fn from(error: duckdb::Error) -> Self {
+        Self::new(DuckDBSQLxError::DuckDBError(error))
+    }
+}
+
 impl DuckDBError {
-    pub fn new(error: duckdb::Error) -> Self {
+    pub fn new(error: DuckDBSQLxError) -> Self {
         let message = error.to_string().to_owned();
         Self {
             error,
