@@ -1,9 +1,8 @@
 use crate::connection::{
-    connect, CallFn, CallFnTrait, ConnectionContext, ConnectionMessage, DuckDBConnection, DuckDBTransactionContext
+    connect, CallFn, ConnectionMessage, DuckDBConnection, DuckDBTransactionContext
 };
 use crate::{DuckDB, DuckDBError};
 use duckdb::Savepoint;
-use futures_channel::oneshot;
 pub(crate) use sqlx_core::connection::*;
 use sqlx_core::executor::Execute;
 use sqlx_core::IndexMap;

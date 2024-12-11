@@ -1,5 +1,4 @@
 use duckdb::{arrow::util::display, Error};
-use futures_channel::oneshot::Canceled;
 pub(crate) use sqlx_core::error::*;
 use derive_more::{derive::{Display, Error}, AsMut, AsRef, Constructor, Debug, Deref, DerefMut, From, Into};
 use std::sync::Arc;
@@ -61,7 +60,7 @@ impl DatabaseError for DuckDBError {
     }
 }
 
-pub(crate) fn convert_received_error<R>(e: Result<Result<R, DuckDBError>, Canceled>) -> Result<R, sqlx_core::Error> {
+pub(crate) fn convert_received_error<R, E>(e: Result<Result<R, DuckDBError>, E>) -> Result<R, sqlx_core::Error> {
     match e {
         Err(_) => Err(sqlx_core::Error::WorkerCrashed),
         Ok(Err(e)) => Err(sqlx_core::Error::from(e)),

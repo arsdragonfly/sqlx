@@ -1,8 +1,9 @@
 use std::cell::Cell;
 use std::result::Result;
 
-use futures_channel::oneshot;
+use duckdb::DropBehavior;
 use futures_core::future::BoxFuture;
+use futures_util::FutureExt;
 pub(crate) use sqlx_core::connection::*;
 
 use crate::database::DuckDB;
@@ -16,8 +17,10 @@ pub type ConnectionCallFn = Box<CallFn>;
 
 pub enum ConnectionMessage {
     Execute(ConnectionCallFn),
-    Close(oneshot::Sender<Result<(), DuckDBError>>),
-    Begin(oneshot::Sender<Result<(), DuckDBError>>),
+    Begin(flume::Sender<Result<(), DuckDBError>>),
+    Commit(flume::Sender<Result<(), DuckDBError>>),
+    Rollback(Option<flume::Sender<Result<(), DuckDBError>>>),
+    Close(flume::Sender<Result<(), DuckDBError>>),
 }
 
 pub(crate) enum DuckDBTransactionContext<'a> {
@@ -28,6 +31,7 @@ pub(crate) enum DuckDBTransactionContext<'a> {
 
 pub(crate) enum DuckDBEventLoopReturnReason {
     Commit,
+    TransactionRollback,
     ConnectionClose,
 }
 
@@ -41,7 +45,7 @@ impl DuckDBConnection {
         F: FnOnce(&duckdb::Connection) -> Result<R, duckdb::Error> + Send + 'static,
         R: Send + 'static,
     {
-        let (sender, receiver) = oneshot::channel::<Result<R, duckdb::Error>>();
+        let (sender, receiver) = flume::bounded::<Result<R, duckdb::Error>>(1);
 
         self.sender
             .send(ConnectionMessage::Execute(Box::new(move |conn| {
@@ -50,7 +54,12 @@ impl DuckDBConnection {
             })))
             .map_err(|_| sqlx_core::Error::WorkerCrashed)?;
 
-        convert_received_error(receiver.await.map(|r| r.map_err(DuckDBError::new)))
+        convert_received_error(
+            receiver
+                .into_recv_async()
+                .await
+                .map(|r| r.map_err(DuckDBError::new)),
+        )
     }
 }
 
@@ -59,30 +68,37 @@ impl Connection for DuckDBConnection {
 
     type Options = DuckDBConnectOptions;
 
+    // close needs to use rendezvous channels to avoid connection/thread leak
+
     fn close(self) -> BoxFuture<'static, Result<(), sqlx_core::Error>> {
-        Box::pin(async move {
-            let (result_sender, result_receiver) = oneshot::channel();
-            self.sender.send(ConnectionMessage::Close(result_sender));
-            let result = result_receiver.await;
-            convert_received_error(result)
-        })
+        let (sender, receiver) = flume::bounded(0);
+        let send_result = self.sender.send(ConnectionMessage::Close(sender));
+        match send_result {
+            Err(_) => Box::pin(async { Err(sqlx_core::Error::WorkerCrashed) }),
+            Ok(_) => Box::pin(
+                receiver
+                    .into_recv_async()
+                    .map(|result| convert_received_error(result)),
+            ),
+        }
     }
 
     fn close_hard(self) -> BoxFuture<'static, Result<(), sqlx_core::Error>> {
         // TODO: duckdb-rs doesn't really provide hard close semantics
-        Box::pin(async move {
-            let (result_sender, result_receiver) = oneshot::channel();
-            self.sender.send(ConnectionMessage::Close(result_sender));
-            let result = result_receiver.await;
-            convert_received_error(result)
-        })
+        let (sender, receiver) = flume::bounded(0);
+        let send_result = self.sender.send(ConnectionMessage::Close(sender));
+        match send_result {
+            Err(_) => Box::pin(async { Err(sqlx_core::Error::WorkerCrashed) }),
+            Ok(_) => Box::pin(
+                receiver
+                    .into_recv_async()
+                    .map(|result| convert_received_error(result)),
+            ),
+        }
     }
 
     fn ping(&mut self) -> BoxFuture<'_, Result<(), sqlx_core::Error>> {
-        Box::pin(async move {
-            self.call(|conn| conn.execute("SELECT 1", []).map(|_| ()))
-                .await
-        })
+        Box::pin(self.call(|conn| conn.execute("SELECT 1", []).map(|_| ())))
     }
 
     #[inline]
@@ -116,53 +132,60 @@ impl Connection for DuckDBConnection {
 pub(crate) fn connect(
     options: &DuckDBConnectOptions,
 ) -> futures_core::future::BoxFuture<'_, Result<DuckDBConnection, sqlx_core::Error>> {
-    Box::pin(async move {
-        let (sender, receiver) = flume::unbounded::<ConnectionMessage>();
-        let (result_sender, result_receiver) =
-            oneshot::channel::<Result<DuckDBConnection, sqlx_core::Error>>();
-        let url_clone = options.url.clone();
-        let config_clone = options.config.clone();
-        std::thread::spawn(move || {
-            let mut config = duckdb::Config::default();
-            for (key, value) in config_clone.config {
-                match config.with(key.as_ref(), value.as_ref()) {
-                    Err(e) => {
-                        result_sender.send(Err(sqlx_core::Error::from(DuckDBError::new(e))));
-                        return;
-                    }
-                    Ok(a) => config = a,
+    let (sender, receiver) = flume::unbounded::<ConnectionMessage>();
+    let (result_sender, result_receiver) =
+        flume::bounded::<Result<DuckDBConnection, sqlx_core::Error>>(0);
+    let url_clone = options.url.clone();
+    let config_clone = options.config.clone();
+    std::thread::spawn(move || {
+        let mut config = duckdb::Config::default();
+        for (key, value) in config_clone.config {
+            match config.with(key.as_ref(), value.as_ref()) {
+                Err(e) => {
+                    result_sender.send(Err(sqlx_core::Error::from(DuckDBError::new(e))));
+                    return;
                 }
+                Ok(a) => config = a,
             }
-            let conn = duckdb::Connection::open_with_flags(url_clone.as_str(), config);
-            if let Err(e) = conn {
-                result_sender.send(Err(sqlx_core::Error::from(DuckDBError::new(e))));
-                return;
-            }
-            result_sender.send(Ok(DuckDBConnection { sender }));
-            let conn_cell: Cell<Option<duckdb::Connection>> = Cell::new(Some(conn.unwrap()));
-            loop {
-                let conn_raw = conn_cell.take().unwrap();
-                let mut initial_context = DuckDBTransactionContext::None;
-                if let (DuckDBEventLoopReturnReason::ConnectionClose, sender) = event_loop(&conn_raw, &mut initial_context, &receiver) {
-                    match conn_raw.close() {
-                        Ok(_) => {
-                            sender.map(|s| s.send(Ok(())));
-                            break;
-                        }
-                        Err((conn_new, e)) => {
-                            sender.map(|s| s.send(Err(DuckDBError::new(e))));
-                            conn_cell.set(Some(conn_new));
-                        }
-                    }
-                }
-            }
-        });
-        let result = result_receiver.await;
-        match result {
-            Err(_) => Err(sqlx_core::Error::WorkerCrashed),
-            Ok(res) => res,
         }
-    })
+        let conn = duckdb::Connection::open_with_flags(url_clone.as_str(), config);
+        if let Err(e) = conn {
+            result_sender.send(Err(sqlx_core::Error::from(DuckDBError::new(e))));
+            return;
+        }
+        if let Err(_) = result_sender.send(Ok(DuckDBConnection { sender })) {
+            // receiver dropped, clean up connection and thread
+            conn.unwrap().close();
+            return;
+        }
+        let conn_cell: Cell<Option<duckdb::Connection>> = Cell::new(Some(conn.unwrap()));
+        loop {
+            let conn_raw = conn_cell.take().unwrap();
+            let mut initial_context = DuckDBTransactionContext::None;
+            if let (DuckDBEventLoopReturnReason::ConnectionClose, sender) =
+                event_loop(&conn_raw, &mut initial_context, &receiver)
+            {
+                match conn_raw.close() {
+                    Ok(_) => {
+                        sender.map(|s| s.send(Ok(())));
+                        break;
+                    }
+                    Err((conn_new, e)) => {
+                        sender.map(|s| s.send(Err(DuckDBError::new(e))));
+                        conn_cell.set(Some(conn_new));
+                    }
+                }
+            }
+        }
+    });
+    Box::pin(
+        result_receiver
+            .into_recv_async()
+            .map(|result| match result {
+                Err(_) => Err(sqlx_core::Error::WorkerCrashed),
+                Ok(res) => res,
+            }),
+    )
 }
 
 fn event_loop(
@@ -171,10 +194,10 @@ fn event_loop(
     receiver: &flume::Receiver<ConnectionMessage>,
 ) -> (
     DuckDBEventLoopReturnReason,
-    Option<oneshot::Sender<Result<(), DuckDBError>>>,
+    Option<flume::Sender<Result<(), DuckDBError>>>,
 ) {
     // Every time we create a new transaction/savepoint, we call event_loop again so that previous tx/sp stays on the stack.
-    // Committing the current transaction/releasing the topmost savepoint returns from the topmost event_loop.
+    // Committing or rolling back the current transaction/releasing the topmost savepoint returns from the topmost event_loop.
     // This plays nicely with the lifetime bounds that duckdb-rs gives us.
     while let Ok(message) = receiver.recv() {
         match message {
@@ -213,10 +236,33 @@ fn event_loop(
                                 .map_err(|e| DuckDBError::new(e));
                                 sender.map(|s| s.send(commit_result));
                             }
+                            DuckDBEventLoopReturnReason::TransactionRollback => {
+                                let rollback_result = match ctx_ {
+                                    DuckDBTransactionContext::Transaction(txn) => txn.rollback(),
+                                    DuckDBTransactionContext::Savepoint(mut sp) => sp.rollback(),
+                                    _ => Ok(()),
+                                }
+                                .map_err(|e| DuckDBError::new(e));
+                                sender.map(|s| s.send(rollback_result));
+                            }
                         }
                     }
                 }
             }
+            ConnectionMessage::Commit(s) => {
+                return (DuckDBEventLoopReturnReason::Commit, Some(s));
+            }
+            ConnectionMessage::Rollback(s) => match ctx {
+                DuckDBTransactionContext::None => {
+                    s.map(|s| s.send(Ok(())));
+                }
+                DuckDBTransactionContext::Transaction(_) => {
+                    return (DuckDBEventLoopReturnReason::TransactionRollback, s);
+                }
+                DuckDBTransactionContext::Savepoint(sp) => {
+                    return (DuckDBEventLoopReturnReason::TransactionRollback, s);
+                }
+            },
             ConnectionMessage::Close(s) => {
                 // close is handled outside the bottommost event_loop because it consumes the connection,
                 // which, by the lifetime bounds of duckdb-rs, invalidates all transactions/savepoints built on top of it.
