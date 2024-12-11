@@ -21,14 +21,26 @@ impl TransactionManager for DuckDBTransactionManager {
     }
 
     fn commit(conn: &mut DuckDBConnection) -> BoxFuture<'_, Result<(), sqlx_core::Error>> {
-        unimplemented!()
+        let (sender, receiver) = flume::bounded::<Result<(), DuckDBError>>(0);
+        let send_result = conn.sender.send(
+            ConnectionMessage::Commit(sender)).map_err(|_| sqlx_core::Error::WorkerCrashed);
+        match send_result {
+            Err(_) => Box::pin(async { Err(sqlx_core::Error::WorkerCrashed) }),
+            Ok(_) => Box::pin(receiver.into_recv_async().map(|result| convert_received_error(result)))
+        }
     }
 
     fn rollback(conn: &mut DuckDBConnection) -> BoxFuture<'_, Result<(), sqlx_core::Error>> {
-        unimplemented!()
+        let (sender, receiver) = flume::bounded::<Result<(), DuckDBError>>(0);
+        let send_result = conn.sender.send(
+            ConnectionMessage::Rollback(Some(sender))).map_err(|_| sqlx_core::Error::WorkerCrashed);
+        match send_result {
+            Err(_) => Box::pin(async { Err(sqlx_core::Error::WorkerCrashed) }),
+            Ok(_) => Box::pin(receiver.into_recv_async().map(|result| convert_received_error(result)))
+        }
     }
 
     fn start_rollback(conn: &mut DuckDBConnection) {
-        unimplemented!()
+        conn.sender.send(ConnectionMessage::Rollback(None));
     }
 }
