@@ -79,6 +79,7 @@ mod database;
 mod options;
 mod transaction;
 mod error;
+mod type_info;
 /*
 mod error;
 mod logger;
@@ -86,7 +87,6 @@ mod query_result;
 mod row;
 mod statement;
 mod type_checking;
-mod type_info;
 pub mod types;
 mod value;
 
