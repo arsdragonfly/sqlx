@@ -21,6 +21,7 @@ pub enum ConnectionMessage {
     Commit(flume::Sender<Result<(), DuckDBError>>),
     Rollback(Option<flume::Sender<Result<(), DuckDBError>>>),
     Close(Option<flume::Sender<Result<(), DuckDBError>>>),
+    GetTransactionDepth(flume::Sender<usize>),
 }
 
 pub(crate) type DuckDBTransactionContext<'a> = Option<duckdb::Transaction<'a>>;
@@ -174,6 +175,7 @@ fn event_loop(
     DuckDBEventLoopReturnReason,
     Option<flume::Sender<Result<(), DuckDBError>>>,
 ) {
+    // Writing some code in advance in case DuckDB supports savepoints in the future.
     // Every time we create a new transaction/savepoint, we call event_loop again so that previous tx/sp stays on the stack.
     // Committing or rolling back the current transaction/releasing the topmost savepoint returns from the topmost event_loop.
     // This plays nicely with the lifetime bounds that duckdb-rs gives us.
@@ -234,6 +236,13 @@ fn event_loop(
                 // If so, fixing the situation would involve fixing upstream duckdb-rs and turning tx/sp APIs into
                 // accessors on the connection object.
                 return (DuckDBEventLoopReturnReason::ConnectionClose, s);
+            }
+            ConnectionMessage::GetTransactionDepth(s) => {
+                let depth = match *ctx {
+                    Some(_) => 1,
+                    None => 0,
+                };
+                s.send(depth);
             }
         }
     }
