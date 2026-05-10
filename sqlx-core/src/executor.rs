@@ -1,6 +1,6 @@
 use crate::database::Database;
-use crate::describe::Describe;
 use crate::error::{BoxDynError, Error};
+use crate::sql_str::{SqlSafeStr, SqlStr};
 
 use either::Either;
 use futures_core::future::BoxFuture;
@@ -148,10 +148,10 @@ pub trait Executor<'c>: Send + Debug + Sized {
     /// This explicit API is provided to allow access to the statement metadata available after
     /// it prepared but before the first row is returned.
     #[inline]
-    fn prepare<'e, 'q: 'e>(
+    fn prepare<'e>(
         self,
-        query: &'q str,
-    ) -> BoxFuture<'e, Result<<Self::Database as Database>::Statement<'q>, Error>>
+        query: SqlStr,
+    ) -> BoxFuture<'e, Result<<Self::Database as Database>::Statement, Error>>
     where
         'c: 'e,
     {
@@ -163,11 +163,11 @@ pub trait Executor<'c>: Send + Debug + Sized {
     ///
     /// Only some database drivers (PostgreSQL, MSSQL) can take advantage of
     /// this extra information to influence parameter type inference.
-    fn prepare_with<'e, 'q: 'e>(
+    fn prepare_with<'e>(
         self,
-        sql: &'q str,
+        sql: SqlStr,
         parameters: &'e [<Self::Database as Database>::TypeInfo],
-    ) -> BoxFuture<'e, Result<<Self::Database as Database>::Statement<'q>, Error>>
+    ) -> BoxFuture<'e, Result<<Self::Database as Database>::Statement, Error>>
     where
         'c: 'e;
 
@@ -177,10 +177,11 @@ pub trait Executor<'c>: Send + Debug + Sized {
     /// This is used by compile-time verification in the query macros to
     /// power their type inference.
     #[doc(hidden)]
-    fn describe<'e, 'q: 'e>(
+    #[cfg(feature = "offline")]
+    fn describe<'e>(
         self,
-        sql: &'q str,
-    ) -> BoxFuture<'e, Result<Describe<Self::Database>, Error>>
+        sql: SqlStr,
+    ) -> BoxFuture<'e, Result<crate::describe::Describe<Self::Database>, Error>>
     where
         'c: 'e;
 }
@@ -194,10 +195,10 @@ pub trait Executor<'c>: Send + Debug + Sized {
 ///
 pub trait Execute<'q, DB: Database>: Send + Sized {
     /// Gets the SQL that will be executed.
-    fn sql(&self) -> &'q str;
+    fn sql(self) -> SqlStr;
 
     /// Gets the previously cached statement, if available.
-    fn statement(&self) -> Option<&DB::Statement<'q>>;
+    fn statement(&self) -> Option<&DB::Statement>;
 
     /// Returns the arguments to be bound against the query string.
     ///
@@ -206,27 +207,28 @@ pub trait Execute<'q, DB: Database>: Send + Sized {
     /// will be prepared (and cached) before execution.
     ///
     /// Returns `Err` if encoding any of the arguments failed.
-    fn take_arguments(&mut self) -> Result<Option<<DB as Database>::Arguments<'q>>, BoxDynError>;
+    fn take_arguments(&mut self) -> Result<Option<<DB as Database>::Arguments>, BoxDynError>;
 
     /// Returns `true` if the statement should be cached.
     fn persistent(&self) -> bool;
 }
 
-// NOTE: `Execute` is explicitly not implemented for String and &String to make it slightly more
-//       involved to write `conn.execute(format!("SELECT {val}"))`
-impl<'q, DB: Database> Execute<'q, DB> for &'q str {
+impl<DB: Database, T> Execute<'_, DB> for T
+where
+    T: SqlSafeStr + Send,
+{
     #[inline]
-    fn sql(&self) -> &'q str {
-        self
+    fn sql(self) -> SqlStr {
+        self.into_sql_str()
     }
 
     #[inline]
-    fn statement(&self) -> Option<&DB::Statement<'q>> {
+    fn statement(&self) -> Option<&DB::Statement> {
         None
     }
 
     #[inline]
-    fn take_arguments(&mut self) -> Result<Option<<DB as Database>::Arguments<'q>>, BoxDynError> {
+    fn take_arguments(&mut self) -> Result<Option<<DB as Database>::Arguments>, BoxDynError> {
         Ok(None)
     }
 
@@ -236,19 +238,22 @@ impl<'q, DB: Database> Execute<'q, DB> for &'q str {
     }
 }
 
-impl<'q, DB: Database> Execute<'q, DB> for (&'q str, Option<<DB as Database>::Arguments<'q>>) {
+impl<DB: Database, T> Execute<'_, DB> for (T, Option<<DB as Database>::Arguments>)
+where
+    T: SqlSafeStr + Send,
+{
     #[inline]
-    fn sql(&self) -> &'q str {
-        self.0
+    fn sql(self) -> SqlStr {
+        self.0.into_sql_str()
     }
 
     #[inline]
-    fn statement(&self) -> Option<&DB::Statement<'q>> {
+    fn statement(&self) -> Option<&DB::Statement> {
         None
     }
 
     #[inline]
-    fn take_arguments(&mut self) -> Result<Option<<DB as Database>::Arguments<'q>>, BoxDynError> {
+    fn take_arguments(&mut self) -> Result<Option<<DB as Database>::Arguments>, BoxDynError> {
         Ok(self.1.take())
     }
 

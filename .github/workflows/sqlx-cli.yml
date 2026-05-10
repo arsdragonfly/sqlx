@@ -11,9 +11,10 @@ jobs:
   check:
     name: Check
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Setup Rust
         run: |
@@ -44,11 +45,13 @@ jobs:
           - ubuntu-latest
           # FIXME: migrations tests fail on Windows for whatever reason
           # - windows-latest
-          - macOS-13
+          - macOS-15-intel
           - macOS-latest
 
+    timeout-minutes: 30
+
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Setup Rust
         run: rustup show active-toolchain || rustup toolchain install
@@ -70,9 +73,10 @@ jobs:
           MYSQL_ROOT_PASSWORD: password
     env:
       BASE_URL: mysql://root:password@localhost
+    timeout-minutes: 30
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Setup Rust
         run: rustup show active-toolchain || rustup toolchain install
@@ -149,9 +153,10 @@ jobs:
           POSTGRES_PASSWORD: password
     env:
       BASE_URL: postgres://postgres:password@localhost
+    timeout-minutes: 30
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Setup Rust
         run: rustup show active-toolchain || rustup toolchain install
@@ -220,9 +225,10 @@ jobs:
     runs-on: ubuntu-latest
     env:
       BASE_URL: sqlite://.
+    timeout-minutes: 30
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Setup Rust
         run: rustup show active-toolchain || rustup toolchain install
@@ -296,7 +302,7 @@ jobs:
         os:
           - ubuntu-latest
           - windows-latest
-          - macOS-13
+          - macOS-15-intel
           - macOS-latest
         include:
           - os: ubuntu-latest
@@ -306,15 +312,17 @@ jobs:
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             bin: target/debug/cargo-sqlx.exe
-          - os: macOS-13
+          - os: macOS-15-intel
             target: x86_64-apple-darwin
             bin: target/debug/cargo-sqlx
           - os: macOS-latest
             target: aarch64-apple-darwin
             bin: target/debug/cargo-sqlx
 
+    timeout-minutes: 30
+
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Setup Rust
         run: |

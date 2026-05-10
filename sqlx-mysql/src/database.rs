@@ -25,10 +25,10 @@ impl Database for MySql {
     type Value = MySqlValue;
     type ValueRef<'r> = MySqlValueRef<'r>;
 
-    type Arguments<'q> = MySqlArguments;
-    type ArgumentBuffer<'q> = Vec<u8>;
+    type Arguments = MySqlArguments;
+    type ArgumentBuffer = Vec<u8>;
 
-    type Statement<'q> = MySqlStatement<'q>;
+    type Statement = MySqlStatement;
 
     const NAME: &'static str = "MySQL";
 

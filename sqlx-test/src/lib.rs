@@ -1,5 +1,5 @@
 use sqlx::pool::PoolOptions;
-use sqlx::{Connection, Database, Pool};
+use sqlx::{Connection, Database, Error, Pool};
 use std::env;
 
 pub fn setup_if_needed() {
@@ -9,13 +9,15 @@ pub fn setup_if_needed() {
 
 // Make a new connection
 // Ensure [dotenvy] and [env_logger] have been setup
-pub async fn new<DB>() -> anyhow::Result<DB::Connection>
+pub async fn new<DB>() -> sqlx::Result<DB::Connection>
 where
     DB: Database,
 {
     setup_if_needed();
 
-    Ok(DB::Connection::connect(&env::var("DATABASE_URL")?).await?)
+    let db_url = env::var("DATABASE_URL").map_err(|e| Error::Configuration(Box::new(e)))?;
+
+    Ok(DB::Connection::connect(&db_url).await?)
 }
 
 // Make a new pool
@@ -108,13 +110,14 @@ macro_rules! test_unprepared_type {
             #[sqlx_macros::test]
             async fn [< test_unprepared_type_ $name >] () -> anyhow::Result<()> {
                 use sqlx::prelude::*;
+                use sqlx_core::sql_str::AssertSqlSafe;
                 use futures_util::TryStreamExt;
 
                 let mut conn = sqlx_test::new::<$db>().await?;
 
                 $(
                     let query = format!("SELECT {}", $text);
-                    let mut s = conn.fetch(&*query);
+                    let mut s = conn.fetch(AssertSqlSafe(query));
                     let row = s.try_next().await?.unwrap();
                     let rec = row.try_get::<$ty, _>(0)?;
 
@@ -137,13 +140,14 @@ macro_rules! __test_prepared_decode_type {
             #[sqlx_macros::test]
             async fn [< test_prepared_decode_type_ $name >] () -> anyhow::Result<()> {
                 use sqlx::Row;
+                use sqlx_core::sql_str::AssertSqlSafe;
 
                 let mut conn = sqlx_test::new::<$db>().await?;
 
                 $(
                     let query = format!("SELECT {}", $text);
 
-                    let row = sqlx::query(&query)
+                    let row = sqlx::query(AssertSqlSafe(query))
                         .fetch_one(&mut conn)
                         .await?;
 
@@ -166,6 +170,7 @@ macro_rules! __test_prepared_type {
             #[sqlx_macros::test]
             async fn [< test_prepared_type_ $name >] () -> anyhow::Result<()> {
                 use sqlx::Row;
+                use sqlx_core::sql_str::AssertSqlSafe;
 
                 let mut conn = sqlx_test::new::<$db>().await?;
 
@@ -173,7 +178,7 @@ macro_rules! __test_prepared_type {
                     let query = format!($sql, $text);
                     println!("{query}");
 
-                    let row = sqlx::query(&query)
+                    let row = sqlx::query(AssertSqlSafe(query))
                         .bind($value)
                         .bind($value)
                         .fetch_one(&mut conn)

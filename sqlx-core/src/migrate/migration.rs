@@ -1,5 +1,8 @@
 use sha2::{Digest, Sha384};
 use std::borrow::Cow;
+use std::cmp::Ordering;
+
+use crate::sql_str::SqlStr;
 
 use super::MigrationType;
 
@@ -8,9 +11,31 @@ pub struct Migration {
     pub version: i64,
     pub description: Cow<'static, str>,
     pub migration_type: MigrationType,
-    pub sql: Cow<'static, str>,
+    pub sql: SqlStr,
     pub checksum: Cow<'static, [u8]>,
     pub no_tx: bool,
+}
+
+impl PartialEq for Migration {
+    fn eq(&self, other: &Self) -> bool {
+        self.version == other.version && self.migration_type == other.migration_type
+    }
+}
+
+impl Eq for Migration {}
+
+impl PartialOrd for Migration {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Migration {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.version
+            .cmp(&other.version)
+            .then_with(|| self.migration_type.cmp(&other.migration_type))
+    }
 }
 
 impl Migration {
@@ -18,10 +43,10 @@ impl Migration {
         version: i64,
         description: Cow<'static, str>,
         migration_type: MigrationType,
-        sql: Cow<'static, str>,
+        sql: SqlStr,
         no_tx: bool,
     ) -> Self {
-        let checksum = checksum(&sql);
+        let checksum = checksum(sql.as_str());
 
         Self::with_checksum(
             version,
@@ -37,7 +62,7 @@ impl Migration {
         version: i64,
         description: Cow<'static, str>,
         migration_type: MigrationType,
-        sql: Cow<'static, str>,
+        sql: SqlStr,
         checksum: Cow<'static, [u8]>,
         no_tx: bool,
     ) -> Self {

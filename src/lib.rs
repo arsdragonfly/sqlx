@@ -30,6 +30,7 @@ pub use sqlx_core::query_scalar::query_scalar_with_result as __query_scalar_with
 pub use sqlx_core::query_scalar::{query_scalar, query_scalar_with};
 pub use sqlx_core::raw_sql::{raw_sql, RawSql};
 pub use sqlx_core::row::Row;
+pub use sqlx_core::sql_str::{AssertSqlSafe, SqlSafeStr, SqlStr};
 pub use sqlx_core::statement::Statement;
 pub use sqlx_core::transaction::Transaction;
 pub use sqlx_core::type_info::TypeInfo;
@@ -101,7 +102,7 @@ mod macros;
 #[doc(hidden)]
 pub mod ty_match;
 
-#[cfg(feature = "macros")]
+#[cfg(any(feature = "derive", feature = "macros"))]
 #[doc(hidden)]
 pub mod spec_error;
 
@@ -174,8 +175,7 @@ pub mod prelude {
     pub use super::Type;
 }
 
-#[cfg(feature = "_unstable-doc")]
-#[cfg_attr(docsrs, doc(cfg(feature = "_unstable-doc")))]
+#[cfg(feature = "_unstable-docs")]
 pub use sqlx_core::config as _config;
 
 // NOTE: APIs exported in this module are SemVer-exempt.

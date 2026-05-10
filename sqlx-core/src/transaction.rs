@@ -1,6 +1,5 @@
-use std::borrow::Cow;
 use std::fmt::{self, Debug, Formatter};
-use std::future;
+use std::future::{self, Future};
 use std::ops::{Deref, DerefMut};
 
 use futures_core::future::BoxFuture;
@@ -8,6 +7,7 @@ use futures_core::future::BoxFuture;
 use crate::database::Database;
 use crate::error::Error;
 use crate::pool::MaybePoolConnection;
+use crate::sql_str::{AssertSqlSafe, SqlSafeStr, SqlStr};
 
 /// Generic management of database transactions.
 ///
@@ -22,20 +22,20 @@ pub trait TransactionManager {
     ///
     /// If we are already inside a transaction and `statement.is_some()`, then
     /// `Error::InvalidSavePoint` is returned without running any statements.
-    fn begin<'conn>(
-        conn: &'conn mut <Self::Database as Database>::Connection,
-        statement: Option<Cow<'static, str>>,
-    ) -> BoxFuture<'conn, Result<(), Error>>;
+    fn begin(
+        conn: &mut <Self::Database as Database>::Connection,
+        statement: Option<SqlStr>,
+    ) -> impl Future<Output = Result<(), Error>> + Send + '_;
 
     /// Commit the active transaction or release the most recent savepoint.
     fn commit(
         conn: &mut <Self::Database as Database>::Connection,
-    ) -> BoxFuture<'_, Result<(), Error>>;
+    ) -> impl Future<Output = Result<(), Error>> + Send + '_;
 
     /// Abort the active transaction or restore from the most recent savepoint.
     fn rollback(
         conn: &mut <Self::Database as Database>::Connection,
-    ) -> BoxFuture<'_, Result<(), Error>>;
+    ) -> impl Future<Output = Result<(), Error>> + Send + '_;
 
     /// Starts to abort the active transaction or restore from the most recent snapshot.
     fn start_rollback(conn: &mut <Self::Database as Database>::Connection);
@@ -98,17 +98,21 @@ where
     #[doc(hidden)]
     pub fn begin(
         conn: impl Into<MaybePoolConnection<'c, DB>>,
-        statement: Option<Cow<'static, str>>,
+        statement: Option<SqlStr>,
     ) -> BoxFuture<'c, Result<Self, Error>> {
-        let mut conn = conn.into();
+        let conn = conn.into();
 
         Box::pin(async move {
-            DB::TransactionManager::begin(&mut conn, statement).await?;
-
-            Ok(Self {
+            let mut tx = Self {
                 connection: conn,
+
+                // If the call to `begin` fails or doesn't complete we want to attempt a rollback in case the transaction was started.
                 open: true,
-            })
+            };
+
+            DB::TransactionManager::begin(&mut tx.connection, statement).await?;
+
+            Ok(tx)
         })
     }
 
@@ -185,6 +189,7 @@ where
 //     }
 //
 //     #[doc(hidden)]
+//     #[cfg(feature = "offline")]
 //     fn describe<'e, 'q: 'e>(
 //         self,
 //         query: &'q str,
@@ -274,29 +279,30 @@ where
     }
 }
 
-pub fn begin_ansi_transaction_sql(depth: usize) -> Cow<'static, str> {
+pub fn begin_ansi_transaction_sql(depth: usize) -> SqlStr {
     if depth == 0 {
-        Cow::Borrowed("BEGIN")
+        "BEGIN".into_sql_str()
     } else {
-        Cow::Owned(format!("SAVEPOINT _sqlx_savepoint_{depth}"))
+        AssertSqlSafe(format!("SAVEPOINT _sqlx_savepoint_{depth}")).into_sql_str()
     }
 }
 
-pub fn commit_ansi_transaction_sql(depth: usize) -> Cow<'static, str> {
+pub fn commit_ansi_transaction_sql(depth: usize) -> SqlStr {
     if depth == 1 {
-        Cow::Borrowed("COMMIT")
+        "COMMIT".into_sql_str()
     } else {
-        Cow::Owned(format!("RELEASE SAVEPOINT _sqlx_savepoint_{}", depth - 1))
+        AssertSqlSafe(format!("RELEASE SAVEPOINT _sqlx_savepoint_{}", depth - 1)).into_sql_str()
     }
 }
 
-pub fn rollback_ansi_transaction_sql(depth: usize) -> Cow<'static, str> {
+pub fn rollback_ansi_transaction_sql(depth: usize) -> SqlStr {
     if depth == 1 {
-        Cow::Borrowed("ROLLBACK")
+        "ROLLBACK".into_sql_str()
     } else {
-        Cow::Owned(format!(
+        AssertSqlSafe(format!(
             "ROLLBACK TO SAVEPOINT _sqlx_savepoint_{}",
             depth - 1
         ))
+        .into_sql_str()
     }
 }

@@ -1,7 +1,7 @@
 extern crate time_ as time;
 
 use sqlx::sqlite::{Sqlite, SqliteRow};
-use sqlx::{FromRow, Type};
+use sqlx::Type;
 use sqlx_core::executor::Executor;
 use sqlx_core::row::Row;
 use sqlx_core::types::Text;
@@ -32,6 +32,10 @@ test_type!(str<String>(Sqlite,
     "'this is foo'" == "this is foo",
     "cast(x'7468697320006973206E756C2D636F6E7461696E696E67' as text)" == "this \0is nul-containing",
     "''" == ""
+));
+
+test_type!(null_str<Option<String>>(Sqlite,
+    "NULL" == None::<String>
 ));
 
 test_type!(bytes<Vec<u8>>(Sqlite,
@@ -175,19 +179,6 @@ mod bstr {
     ));
 }
 
-#[cfg(feature = "git2")]
-mod git2 {
-    use super::*;
-    use sqlx::types::git2::Oid;
-
-    test_type!(oid<Oid>(
-        Sqlite,
-        "x'0000000000000000000000000000000000000000'" == Oid::zero(),
-        "x'000102030405060708090a0b0c0d0e0f10111213'"
-            == Oid::from_str("000102030405060708090a0b0c0d0e0f10111213").unwrap()
-    ));
-}
-
 #[cfg(feature = "uuid")]
 test_type!(uuid<sqlx::types::Uuid>(Sqlite,
     "x'b731678f636f4135bc6f19440c13bd19'"
@@ -219,9 +210,13 @@ test_type!(test_rc<Rc<i32>>(Sqlite, "1" == Rc::new(1i32)));
 
 test_type!(test_box_str<Box<str>>(Sqlite, "'John'" == Box::<str>::from("John")));
 test_type!(test_cow_str<Cow<'_, str>>(Sqlite, "'Phil'" == Cow::<'static, str>::from("Phil")));
+test_type!(test_arc_str<Arc<str>>(Sqlite, "'1234'" == Arc::<str>::from("1234")));
+test_type!(test_rc_str<Rc<str>>(Sqlite, "'5678'" == Rc::<str>::from("5678")));
 
 test_type!(test_box_slice<Box<[u8]>>(Sqlite, "X'01020304'" == Box::<[u8]>::from([1,2,3,4])));
 test_type!(test_cow_slice<Cow<'_, [u8]>>(Sqlite, "X'01020304'" == Cow::<'static, [u8]>::from(&[1,2,3,4])));
+test_type!(test_arc_slice<Arc<[u8]>>(Sqlite, "X'01020304'" == Arc::<[u8]>::from([1,2,3,4])));
+test_type!(test_rc_slice<Rc<[u8]>>(Sqlite, "X'01020304'" == Rc::<[u8]>::from([1,2,3,4])));
 
 #[sqlx_macros::test]
 async fn test_text_adapter() -> anyhow::Result<()> {

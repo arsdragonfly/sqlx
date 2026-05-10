@@ -1,23 +1,43 @@
+//! # SQLx CLI
+//!
+//! Command-line utility for the [SQLx](https://github.com/launchbadge/sqlx) ecosystem.
+//!
+//! This crate provides the core logic for the `sqlx` command-line interface, enabling database management,
+//! migrations, and offline query preparation for Rust projects using SQLx.
+//!
+//! ### Note: Semver Exempt API
+//! The API of this crate is not meant for general use and does *not* follow Semantic Versioning.
+//! The only crate that follows Semantic Versioning in the project is the `sqlx` crate itself.
+//! If you are building a custom SQLx driver, you should pin an exact version for `sqlx-cli` to
+//! avoid breakages:
+//!
+//! ```toml
+//! sqlx-cli = { version = "=0.9.0" }
+//! ```
+//!
+//! And then make releases in lockstep with `sqlx-cli`. We recommend all driver crates, in-tree
+//! or otherwise, use the same version numbers as `sqlx-cli` to avoid confusion.
+
 use std::future::Future;
 use std::io;
 use std::time::Duration;
 
 use futures_util::TryFutureExt;
 
-use sqlx::{AnyConnection, Connection};
+use sqlx::AnyConnection;
 use tokio::{select, signal};
 
-use crate::opt::{Command, ConnectOpts, DatabaseCommand, MigrateCommand};
+use crate::opt::{Command, ConnectOpts, DatabaseCommand, MigrateCommand, OverrideCommand};
 
-mod database;
-mod metadata;
+pub mod database;
+pub mod metadata;
 // mod migration;
 // mod migrator;
 #[cfg(feature = "completions")]
-mod completions;
-mod migrate;
-mod opt;
-mod prepare;
+pub mod completions;
+pub mod migrate;
+pub mod opt;
+pub mod prepare;
 
 pub use crate::opt::Opt;
 
@@ -29,7 +49,11 @@ pub fn maybe_apply_dotenv() {
         return;
     }
 
-    dotenvy::dotenv().ok();
+    if let Err(e) = dotenvy::dotenv() {
+        if !e.not_found() {
+            eprintln!("Warning: error loading `.env` file: {e:?}");
+        }
+    }
 }
 
 pub async fn run(opt: Opt) -> anyhow::Result<()> {
@@ -75,6 +99,7 @@ async fn do_run(opt: Opt) -> anyhow::Result<()> {
                     dry_run,
                     *ignore_missing,
                     target_version,
+                    false,
                 )
                 .await?
             }
@@ -100,6 +125,30 @@ async fn do_run(opt: Opt) -> anyhow::Result<()> {
                 )
                 .await?
             }
+            MigrateCommand::Override { command } => match command {
+                OverrideCommand::Skip {
+                    source,
+                    config,
+                    mut connect_opts,
+                    dry_run,
+                    ignore_missing,
+                    target_version,
+                } => {
+                    let config = config.load_config().await?;
+                    connect_opts.populate_db_url(&config)?;
+
+                    migrate::run(
+                        &config,
+                        &source,
+                        &connect_opts,
+                        dry_run,
+                        *ignore_missing,
+                        target_version,
+                        true,
+                    )
+                    .await?
+                }
+            },
             MigrateCommand::Info {
                 source,
                 config,
@@ -177,7 +226,7 @@ async fn do_run(opt: Opt) -> anyhow::Result<()> {
         } => {
             let config = config.load_config().await?;
             connect_opts.populate_db_url(&config)?;
-            prepare::run(check, all, workspace, connect_opts, args).await?
+            prepare::run(&config, check, all, workspace, connect_opts, args).await?
         }
 
         #[cfg(feature = "completions")]
@@ -188,8 +237,11 @@ async fn do_run(opt: Opt) -> anyhow::Result<()> {
 }
 
 /// Attempt to connect to the database server, retrying up to `ops.connect_timeout`.
-async fn connect(opts: &ConnectOpts) -> anyhow::Result<AnyConnection> {
-    retry_connect_errors(opts, AnyConnection::connect).await
+async fn connect(config: &Config, opts: &ConnectOpts) -> anyhow::Result<AnyConnection> {
+    retry_connect_errors(opts, move |url| {
+        AnyConnection::connect_with_driver_config(url, &config.drivers)
+    })
+    .await
 }
 
 /// Attempt an operation that may return errors like `ConnectionRefused`,
@@ -204,8 +256,6 @@ where
     F: FnMut(&'a str) -> Fut,
     Fut: Future<Output = sqlx::Result<T>> + 'a,
 {
-    sqlx::any::install_default_drivers();
-
     let db_url = opts.expect_db_url()?;
 
     backoff::future::retry(

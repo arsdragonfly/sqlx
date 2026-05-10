@@ -17,6 +17,48 @@ database-url-var = "FOO_DATABASE_URL"
 
 ###############################################################################################
 
+# Configuration of SQLx database drivers (**applies to macros and sqlx-cli only**)
+[drivers]
+
+# Configure MySQL databases in macros and sqlx-cli.
+[drivers.mysql]
+# No fields implemented yet. This key is only used to validate parsing.
+
+# Configure Postgres databases in macros and sqlx-cli.
+[drivers.postgres]
+# No fields implemented yet. This key is only used to validate parsing.
+
+# Configure Postgres databases in macros and sqlx-cli.
+[drivers.sqlite]
+# Load extensions into SQLite when running macros or migrations
+#
+# Defaults to an empty list, which has no effect.
+#
+# Must be specified separately at run-time using `SqliteConnectOptions::extension()` or `::extension_with_entrypoint()`.
+#
+# Safety
+# This causes arbitrary DLLs on the filesystem to be loaded at runtime,
+# which can easily result in undefined behavior, memory corruption,
+# or exploitable vulnerabilities if misused.
+#
+# It is not possible to provide a truly safe version of this API.
+#
+# Use this field with care, and only load extensions that you trust.
+unsafe-load-extensions = [
+	"uuid",
+	{ path = "vsv_renamed", entrypoint = "sqlite3_vsv_init" },
+]
+
+# Configure external drivers in macros and sqlx-cli.
+#
+# These keys are only validated when the external driver tries to parse them,
+# unlike config for built-in drivers which is validated directly.
+[drivers.external."<external driver name>"]
+foo = 'foo'
+bar = true
+
+###############################################################################################
+
 # Configuration for the `query!()` family of macros.
 [macros]
 
@@ -51,8 +93,8 @@ numeric = "rust_decimal"
 # or not. They only override the inner type used.
 [macros.type-overrides]
 # Override a built-in type (map all `UUID` columns to `crate::types::MyUuid`)
-# Note: currently, the case of the type name MUST match. 
-# Built-in types are spelled in all-uppercase to match SQL convention. 
+# Note: currently, the case of the type name MUST match.
+# Built-in types are spelled in all-uppercase to match SQL convention.
 'UUID' = "crate::types::MyUuid"
 
 # Support an external or custom wrapper type (e.g. from the `isn` Postgres extension)
@@ -167,7 +209,7 @@ migrations-dir = "foo/migrations"
 # Note that the TOML format requires double-quoted strings to process escapes.
 # ignored-chars = ["\r"]
 
-# Ignore common whitespace characters (beware syntatically significant whitespace!)
+# Ignore common whitespace characters (beware syntactically significant whitespace!)
 # Space, tab, CR, LF, zero-width non-breaking space (U+FEFF)
 #
 # U+FEFF is added by some editors as a magic number at the beginning of a text file indicating it is UTF-8 encoded,

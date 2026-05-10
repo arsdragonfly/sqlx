@@ -3,7 +3,6 @@ use std::ops::{Deref, DerefMut};
 
 use bytes::{Buf, Bytes, BytesMut};
 
-use crate::collation::{CharSet, Collation};
 use crate::error::Error;
 use crate::io::MySqlBufExt;
 use crate::io::{ProtocolDecode, ProtocolEncode};
@@ -19,8 +18,6 @@ pub struct MySqlStream<S = Box<dyn Socket>> {
     pub(super) capabilities: Capabilities,
     pub(crate) sequence_id: u8,
     pub(crate) waiting: VecDeque<Waiting>,
-    pub(crate) charset: CharSet,
-    pub(crate) collation: Collation,
     pub(crate) is_tls: bool,
 }
 
@@ -34,12 +31,7 @@ pub(crate) enum Waiting {
 }
 
 impl<S: Socket> MySqlStream<S> {
-    pub(crate) fn with_socket(
-        charset: CharSet,
-        collation: Collation,
-        options: &MySqlConnectOptions,
-        socket: S,
-    ) -> Self {
+    pub(crate) fn with_socket(options: &MySqlConnectOptions, socket: S) -> Self {
         let mut capabilities = Capabilities::PROTOCOL_41
             | Capabilities::IGNORE_SPACE
             | Capabilities::DEPRECATE_EOF
@@ -62,8 +54,6 @@ impl<S: Socket> MySqlStream<S> {
             capabilities,
             server_version: (0, 0, 0),
             sequence_id: 0,
-            collation,
-            charset,
             socket: BufferedSocket::new(socket),
             is_tls: false,
         }
@@ -204,7 +194,7 @@ impl<S: Socket> MySqlStream<S> {
     }
 
     async fn skip_result_metadata(&mut self, mut packet: Packet<Bytes>) -> Result<(), Error> {
-        let num_columns: u64 = packet.get_uint_lenenc(); // column count
+        let num_columns: u64 = packet.get_uint_lenenc()?; // column count
 
         for _ in 0..num_columns {
             let _ = self.recv_packet().await?;
@@ -222,8 +212,6 @@ impl<S: Socket> MySqlStream<S> {
             capabilities: self.capabilities,
             sequence_id: self.sequence_id,
             waiting: self.waiting,
-            charset: self.charset,
-            collation: self.collation,
             is_tls: self.is_tls,
         }
     }

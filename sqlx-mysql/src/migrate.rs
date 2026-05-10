@@ -2,6 +2,10 @@ use std::str::FromStr;
 use std::time::Duration;
 use std::time::Instant;
 
+use futures_core::future::BoxFuture;
+pub(crate) use sqlx_core::migrate::*;
+use sqlx_core::sql_str::AssertSqlSafe;
+
 use crate::connection::{ConnectOptions, Connection};
 use crate::error::Error;
 use crate::executor::Executor;
@@ -9,8 +13,6 @@ use crate::query::query;
 use crate::query_as::query_as;
 use crate::query_scalar::query_scalar;
 use crate::{MySql, MySqlConnectOptions, MySqlConnection};
-use futures_core::future::BoxFuture;
-pub(crate) use sqlx_core::migrate::*;
 
 fn parse_for_maintenance(url: &str) -> Result<(MySqlConnectOptions, String), Error> {
     let mut options = MySqlConnectOptions::from_str(url)?;
@@ -30,46 +32,42 @@ fn parse_for_maintenance(url: &str) -> Result<(MySqlConnectOptions, String), Err
 }
 
 impl MigrateDatabase for MySql {
-    fn create_database(url: &str) -> BoxFuture<'_, Result<(), Error>> {
-        Box::pin(async move {
-            let (options, database) = parse_for_maintenance(url)?;
-            let mut conn = options.connect().await?;
+    async fn create_database(url: &str) -> Result<(), Error> {
+        let (options, database) = parse_for_maintenance(url)?;
+        let mut conn = options.connect().await?;
 
-            let _ = conn
-                .execute(&*format!("CREATE DATABASE `{database}`"))
-                .await?;
-
-            Ok(())
-        })
-    }
-
-    fn database_exists(url: &str) -> BoxFuture<'_, Result<bool, Error>> {
-        Box::pin(async move {
-            let (options, database) = parse_for_maintenance(url)?;
-            let mut conn = options.connect().await?;
-
-            let exists: bool = query_scalar(
-                "select exists(SELECT 1 from INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME = ?)",
-            )
-            .bind(database)
-            .fetch_one(&mut conn)
+        let _ = conn
+            .execute(AssertSqlSafe(format!("CREATE DATABASE `{database}`")))
             .await?;
 
-            Ok(exists)
-        })
+        Ok(())
     }
 
-    fn drop_database(url: &str) -> BoxFuture<'_, Result<(), Error>> {
-        Box::pin(async move {
-            let (options, database) = parse_for_maintenance(url)?;
-            let mut conn = options.connect().await?;
+    async fn database_exists(url: &str) -> Result<bool, Error> {
+        let (options, database) = parse_for_maintenance(url)?;
+        let mut conn = options.connect().await?;
 
-            let _ = conn
-                .execute(&*format!("DROP DATABASE IF EXISTS `{database}`"))
-                .await?;
+        let exists: bool = query_scalar(
+            "select exists(SELECT 1 from INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME = ?)",
+        )
+        .bind(database)
+        .fetch_one(&mut conn)
+        .await?;
 
-            Ok(())
-        })
+        Ok(exists)
+    }
+
+    async fn drop_database(url: &str) -> Result<(), Error> {
+        let (options, database) = parse_for_maintenance(url)?;
+        let mut conn = options.connect().await?;
+
+        let _ = conn
+            .execute(AssertSqlSafe(format!(
+                "DROP DATABASE IF EXISTS `{database}`"
+            )))
+            .await?;
+
+        Ok(())
     }
 }
 
@@ -80,8 +78,10 @@ impl Migrate for MySqlConnection {
     ) -> BoxFuture<'e, Result<(), MigrateError>> {
         Box::pin(async move {
             // language=SQL
-            self.execute(&*format!(r#"CREATE SCHEMA IF NOT EXISTS {schema_name};"#))
-                .await?;
+            self.execute(AssertSqlSafe(format!(
+                r#"CREATE SCHEMA IF NOT EXISTS {schema_name};"#
+            )))
+            .await?;
 
             Ok(())
         })
@@ -93,7 +93,7 @@ impl Migrate for MySqlConnection {
     ) -> BoxFuture<'e, Result<(), MigrateError>> {
         Box::pin(async move {
             // language=MySQL
-            self.execute(&*format!(
+            self.execute(AssertSqlSafe(format!(
                 r#"
 CREATE TABLE IF NOT EXISTS {table_name} (
     version BIGINT PRIMARY KEY,
@@ -104,7 +104,7 @@ CREATE TABLE IF NOT EXISTS {table_name} (
     execution_time BIGINT NOT NULL
 );
                 "#
-            ))
+            )))
             .await?;
 
             Ok(())
@@ -117,9 +117,9 @@ CREATE TABLE IF NOT EXISTS {table_name} (
     ) -> BoxFuture<'e, Result<Option<i64>, MigrateError>> {
         Box::pin(async move {
             // language=SQL
-            let row: Option<(i64,)> = query_as(&format!(
+            let row: Option<(i64,)> = query_as(AssertSqlSafe(format!(
                 "SELECT version FROM {table_name} WHERE success = false ORDER BY version LIMIT 1"
-            ))
+            )))
             .fetch_optional(self)
             .await?;
 
@@ -133,9 +133,9 @@ CREATE TABLE IF NOT EXISTS {table_name} (
     ) -> BoxFuture<'e, Result<Vec<AppliedMigration>, MigrateError>> {
         Box::pin(async move {
             // language=SQL
-            let rows: Vec<(i64, Vec<u8>)> = query_as(&format!(
+            let rows: Vec<(i64, Vec<u8>)> = query_as(AssertSqlSafe(format!(
                 "SELECT version, checksum FROM {table_name} ORDER BY version"
-            ))
+            )))
             .fetch_all(self)
             .await?;
 
@@ -193,7 +193,7 @@ CREATE TABLE IF NOT EXISTS {table_name} (
         migration: &'e Migration,
     ) -> BoxFuture<'e, Result<Duration, MigrateError>> {
         Box::pin(async move {
-            // Use a single transaction for the actual migration script and the essential bookeeping so we never
+            // Use a single transaction for the actual migration script and the essential bookkeeping so we never
             // execute migrations twice. See https://github.com/launchbadge/sqlx/issues/1966.
             // The `execution_time` however can only be measured for the whole transaction. This value _only_ exists for
             // data lineage and debugging reasons, so it is not super important if it is lost. So we initialize it to -1
@@ -208,12 +208,12 @@ CREATE TABLE IF NOT EXISTS {table_name} (
             // `success=FALSE` and later modify the flag.
             //
             // language=MySQL
-            let _ = query(&format!(
+            let _ = query(AssertSqlSafe(format!(
                 r#"
     INSERT INTO {table_name} ( version, description, success, checksum, execution_time )
     VALUES ( ?, ?, FALSE, ?, -1 )
                 "#
-            ))
+            )))
             .bind(migration.version)
             .bind(&*migration.description)
             .bind(&*migration.checksum)
@@ -221,18 +221,18 @@ CREATE TABLE IF NOT EXISTS {table_name} (
             .await?;
 
             let _ = tx
-                .execute(&*migration.sql)
+                .execute(migration.sql.clone())
                 .await
                 .map_err(|e| MigrateError::ExecuteMigration(e, migration.version))?;
 
             // language=MySQL
-            let _ = query(&format!(
+            let _ = query(AssertSqlSafe(format!(
                 r#"
     UPDATE {table_name}
     SET success = TRUE
     WHERE version = ?
                 "#
-            ))
+            )))
             .bind(migration.version)
             .execute(&mut *tx)
             .await?;
@@ -246,13 +246,13 @@ CREATE TABLE IF NOT EXISTS {table_name} (
             let elapsed = start.elapsed();
 
             #[allow(clippy::cast_possible_truncation)]
-            let _ = query(&format!(
+            let _ = query(AssertSqlSafe(format!(
                 r#"
     UPDATE {table_name}
     SET execution_time = ?
     WHERE version = ?
                 "#
-            ))
+            )))
             .bind(elapsed.as_nanos() as i64)
             .bind(migration.version)
             .execute(self)
@@ -268,7 +268,7 @@ CREATE TABLE IF NOT EXISTS {table_name} (
         migration: &'e Migration,
     ) -> BoxFuture<'e, Result<Duration, MigrateError>> {
         Box::pin(async move {
-            // Use a single transaction for the actual migration script and the essential bookeeping so we never
+            // Use a single transaction for the actual migration script and the essential bookkeeping so we never
             // execute migrations twice. See https://github.com/launchbadge/sqlx/issues/1966.
             let mut tx = self.begin().await?;
             let start = Instant::now();
@@ -280,30 +280,55 @@ CREATE TABLE IF NOT EXISTS {table_name} (
             // `success=FALSE` and later remove the migration altogether.
             //
             // language=MySQL
-            let _ = query(&format!(
+            let _ = query(AssertSqlSafe(format!(
                 r#"
     UPDATE {table_name}
     SET success = FALSE
     WHERE version = ?
                 "#
-            ))
+            )))
             .bind(migration.version)
             .execute(&mut *tx)
             .await?;
 
-            tx.execute(&*migration.sql).await?;
+            tx.execute(migration.sql.clone()).await?;
 
             // language=SQL
-            let _ = query(&format!(r#"DELETE FROM {table_name} WHERE version = ?"#))
-                .bind(migration.version)
-                .execute(&mut *tx)
-                .await?;
+            let _ = query(AssertSqlSafe(format!(
+                r#"DELETE FROM {table_name} WHERE version = ?"#
+            )))
+            .bind(migration.version)
+            .execute(&mut *tx)
+            .await?;
 
             tx.commit().await?;
 
             let elapsed = start.elapsed();
 
             Ok(elapsed)
+        })
+    }
+
+    fn skip<'e>(
+        &'e mut self,
+        table_name: &'e str,
+        migration: &'e Migration,
+    ) -> BoxFuture<'e, Result<(), MigrateError>> {
+        Box::pin(async move {
+            // language=MySQL
+            let _ = query(AssertSqlSafe(format!(
+                r#"
+    INSERT INTO {table_name} ( version, description, success, checksum, execution_time )
+    VALUES ( ?, ?, TRUE, ?, -1 )
+        "#
+            )))
+            .bind(migration.version)
+            .bind(&*migration.description)
+            .bind(&*migration.checksum)
+            .execute(self)
+            .await?;
+
+            Ok(())
         })
     }
 }

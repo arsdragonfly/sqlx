@@ -1,12 +1,12 @@
 use std::str;
 
-use bitflags::bitflags;
-use bytes::{Buf, Bytes};
-
+use crate::collation::Collation;
 use crate::error::Error;
 use crate::io::MySqlBufExt;
 use crate::io::ProtocolDecode;
 use crate::protocol::Capabilities;
+use bitflags::bitflags;
+use bytes::{Buf, Bytes};
 
 // https://dev.mysql.com/doc/dev/mysql-server/8.0.12/group__group__cs__column__definition__flags.html
 
@@ -41,7 +41,7 @@ bitflags! {
         /// Field is an enumeration.
         const ENUM = 256;
 
-        /// Field is an auto-incement field.
+        /// Field is an auto-increment field.
         const AUTO_INCREMENT = 512;
 
         /// Field is a timestamp.
@@ -110,8 +110,7 @@ pub(crate) struct ColumnDefinition {
     table: Bytes,
     alias: Bytes,
     name: Bytes,
-    #[allow(unused)]
-    pub(crate) collation: u16,
+    pub(crate) collation: Collation,
     pub(crate) max_size: u32,
     pub(crate) r#type: ColumnType,
     pub(crate) flags: ColumnFlags,
@@ -148,7 +147,7 @@ impl ProtocolDecode<'_, Capabilities> for ColumnDefinition {
         let table = buf.get_bytes_lenenc()?;
         let alias = buf.get_bytes_lenenc()?;
         let name = buf.get_bytes_lenenc()?;
-        let _next_len = buf.get_uint_lenenc(); // always 0x0c
+        let _next_len = buf.get_uint_lenenc()?; // always 0x0c
         let collation = buf.get_u16_le();
         let max_size = buf.get_u32_le();
         let type_id = buf.get_u8();
@@ -162,7 +161,7 @@ impl ProtocolDecode<'_, Capabilities> for ColumnDefinition {
             table,
             alias,
             name,
-            collation,
+            collation: Collation(collation),
             max_size,
             r#type: ColumnType::try_from_u16(type_id)?,
             flags: ColumnFlags::from_bits_truncate(flags),

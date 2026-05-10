@@ -1,6 +1,7 @@
 use futures_util::TryStreamExt;
 use sqlx::postgres::types::PgRange;
 use sqlx::{Connection, Executor, FromRow, Postgres};
+use sqlx_core::sql_str::AssertSqlSafe;
 use sqlx_postgres::PgHasArrayType;
 use sqlx_test::{new, test_type};
 use std::fmt::Debug;
@@ -10,6 +11,13 @@ use std::ops::Bound;
 #[derive(PartialEq, Debug, sqlx::Type)]
 #[sqlx(transparent)]
 struct Transparent(i32);
+
+// Also possible for single-field named structs
+#[derive(PartialEq, Debug, sqlx::Type)]
+#[sqlx(transparent)]
+struct TransparentNamed {
+    field: i32,
+}
 
 #[derive(PartialEq, Debug, sqlx::Type)]
 // https://github.com/launchbadge/sqlx/issues/2611
@@ -142,9 +150,14 @@ struct FloatRange(PgRange<f64>);
 #[sqlx(type_name = "int4rangeL0pC")]
 struct RangeInclusive(PgRange<i32>);
 
-test_type!(transparent<Transparent>(Postgres,
+test_type!(transparent_tuple<Transparent>(Postgres,
     "0" == Transparent(0),
     "23523" == Transparent(23523)
+));
+
+test_type!(transparent_named<TransparentNamed>(Postgres,
+    "0" == TransparentNamed { field: 0 },
+    "23523" == TransparentNamed { field: 23523 },
 ));
 
 test_type!(transparent_array<TransparentArray>(Postgres,
@@ -259,7 +272,7 @@ SELECT id, mood FROM people WHERE id = $1
     let stmt = format!("SELECT id, mood FROM people WHERE id = {people_id}");
     dbg!(&stmt);
 
-    let mut cursor = conn.fetch(&*stmt);
+    let mut cursor = conn.fetch(AssertSqlSafe(stmt));
 
     let row = cursor.try_next().await?.unwrap();
     let rec = PeopleRow::from_row(&row)?;
@@ -805,7 +818,7 @@ async fn test_custom_pg_array() -> anyhow::Result<()> {
 
     impl PgHasArrayType for User {
         fn array_type_info() -> sqlx::postgres::PgTypeInfo {
-            sqlx::postgres::PgTypeInfo::array_of("Gebruiker")
+            sqlx::postgres::PgTypeInfo::array_of("User")
         }
     }
     Ok(())

@@ -130,7 +130,7 @@ pub async fn info(
 ) -> anyhow::Result<()> {
     let migrator = migration_source.resolve(config).await?;
 
-    let mut conn = crate::connect(connect_opts).await?;
+    let mut conn = crate::connect(config, connect_opts).await?;
 
     // FIXME: we shouldn't actually be creating anything here
     for schema_name in &config.migrate.create_schemas {
@@ -220,6 +220,7 @@ pub async fn run(
     dry_run: bool,
     ignore_missing: bool,
     target_version: Option<i64>,
+    skip: bool,
 ) -> anyhow::Result<()> {
     let migrator = migration_source.resolve(config).await?;
 
@@ -229,7 +230,7 @@ pub async fn run(
         }
     }
 
-    let mut conn = crate::connect(connect_opts).await?;
+    let mut conn = crate::connect(config, connect_opts).await?;
 
     for schema_name in &config.migrate.create_schemas {
         conn.create_schema_if_not_exists(schema_name).await?;
@@ -277,18 +278,23 @@ pub async fn run(
                 }
             }
             None => {
-                let skip =
+                let exceeds_target =
                     target_version.is_some_and(|target_version| migration.version > target_version);
 
-                let elapsed = if dry_run || skip {
+                let elapsed = if dry_run || exceeds_target {
+                    Duration::new(0, 0)
+                } else if skip {
+                    conn.skip(config.migrate.table_name(), migration).await?;
                     Duration::new(0, 0)
                 } else {
                     conn.apply(config.migrate.table_name(), migration).await?
                 };
-                let text = if skip {
+                let text = if exceeds_target {
                     "Skipped"
                 } else if dry_run {
                     "Can apply"
+                } else if skip {
+                    "Skipped on request"
                 } else {
                     "Applied"
                 };
@@ -331,7 +337,7 @@ pub async fn revert(
         }
     }
 
-    let mut conn = crate::connect(connect_opts).await?;
+    let mut conn = crate::connect(config, connect_opts).await?;
 
     // FIXME: we should not be creating anything here if it doesn't exist
     for schema_name in &config.migrate.create_schemas {
